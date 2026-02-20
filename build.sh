@@ -153,7 +153,11 @@ case "$BUILD_CHOICE" in
     # Install deps if needed
     if [ ! -d "node_modules" ]; then
         echo "  ${GREEN}==> Installing dependencies...${NC}"
-        npm ci
+        if [ -f "package-lock.json" ]; then
+            npm ci
+        else
+            npm install
+        fi
     fi
 
     echo "  ${GREEN}==> Cleaning previous build...${NC}"
@@ -258,8 +262,19 @@ case "$BUILD_CHOICE" in
             fi
         done
 
+        RELEASE_URL="https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/download/v$VERSION"
+
         echo ""
         echo "  ${GREEN}==> Release published!${NC}"
+        echo ""
+        echo "  ${BOLD}Download URLs:${NC}"
+        for FILE in release/*.dmg release/*.zip release/*.exe; do
+            [ -f "$FILE" ] || continue
+            FILENAME=$(basename "$FILE")
+            echo "  ${CYAN}$RELEASE_URL/$FILENAME${NC}"
+        done
+        echo ""
+        echo "  ${BOLD}Release page:${NC}"
         echo "  https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/tag/v$VERSION"
     else
         echo "  Skipped. Artifacts are in release/"
