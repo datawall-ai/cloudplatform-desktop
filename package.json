@@ -29,7 +29,9 @@
         { "target": "zip", "arch": ["x64", "arm64"] }
       ],
       "icon": "icons/logo.png",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "notarize": true
     },
     "win": {
       "target": [
