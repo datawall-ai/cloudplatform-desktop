@@ -169,6 +169,23 @@ case "$BUILD_CHOICE" in
     echo "  ${GREEN}==> Building macOS (x64 + arm64)...${NC}"
     npx electron-builder --mac
 
+    # Notarize DMGs (electron-builder only notarizes the .app, not the DMG wrapper)
+    if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+        for DMG in release/*.dmg; do
+            [ -f "$DMG" ] || continue
+            echo "  ${GREEN}==> Notarizing $(basename "$DMG")...${NC}"
+            xcrun notarytool submit "$DMG" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" \
+                --wait
+            echo "  ${GREEN}==> Stapling $(basename "$DMG")...${NC}"
+            xcrun stapler staple "$DMG"
+        done
+    else
+        echo "  ${YELLOW}Skipping DMG notarization (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID not set)${NC}"
+    fi
+
     echo "  ${GREEN}==> Building Windows (x64 + arm64)...${NC}"
     npx electron-builder --win
 
