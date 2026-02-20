@@ -2,9 +2,9 @@
   "name": "cloudplatform-desktop",
   "private": true,
 <<<<<<< HEAD
-  "version": "2026.2.20-12",
+  "version": "2026.2.20-13",
 =======
-  "version": "2026.2.20-10",
+  "version": "2026.2.20-13",
 >>>>>>> 21929fa (fixup - reverting to old dep strat)
   "description": "Cloud Platform desktop app — thin Electron shell loading c.datawall.ai",
   "author": "Datawall AI",
