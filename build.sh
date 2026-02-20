@@ -206,83 +206,45 @@ case "$BUILD_CHOICE" in
 
     if [[ "$PUBLISH_CHOICE" =~ ^[Yy]$ ]]; then
 
-        if [ -z "$GITHUB_TOKEN" ]; then
+        # Require gh CLI for reliable uploads (curl --data-binary corrupts large files)
+        if ! command -v gh &>/dev/null; then
             echo ""
-            echo "  ${RED}GITHUB_TOKEN is not set.${NC}"
+            echo "  ${RED}gh CLI is required for publishing releases.${NC}"
             echo ""
-            echo "  Run this first, then re-run ./build.sh:"
-            echo "    export GITHUB_TOKEN=ghp_your_token_here"
+            echo "  Install it:"
+            echo "    brew install gh"
+            echo "    gh auth login"
             echo ""
-            echo "  Create a token at: https://github.com/settings/tokens"
-            echo "    → Generate new token (classic) with 'repo' scope"
+            echo "  Artifacts are in release/"
             exit 1
         fi
 
-        echo "  ${GREEN}==> Creating release v$VERSION...${NC}"
+        echo "  ${GREEN}==> Creating release v$VERSION and uploading artifacts...${NC}"
 
-        # Build release body
-        BODY="Release v$VERSION\\n\\n## Download\\n\\n"
-        BODY+="| Platform | File |\\n|----------|------|\\n"
-        for f in release/*.dmg; do
-            [ -f "$f" ] && BODY+="| macOS | $(basename "$f") |\\n"
-        done
-        for f in release/*.exe; do
-            [ -f "$f" ] && BODY+="| Windows | $(basename "$f") |\\n"
-        done
-
-        RELEASE_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases" \
-            -d "{
-                \"tag_name\": \"v$VERSION\",
-                \"name\": \"v$VERSION\",
-                \"body\": \"$BODY\",
-                \"draft\": false,
-                \"prerelease\": false
-            }")
-
-        if echo "$RELEASE_RESPONSE" | grep -q '"id"'; then
-            RELEASE_ID=$(echo "$RELEASE_RESPONSE" | grep -o '"id": [0-9]*' | head -1 | grep -o '[0-9]*')
-            echo "  Created release (ID: $RELEASE_ID)"
-        else
-            echo "  ${RED}Error creating release:${NC}"
-            echo "$RELEASE_RESPONSE"
-            exit 1
-        fi
-
-        # Upload artifacts
+        # Collect artifact files
+        ARTIFACTS=()
         for FILE in release/*.dmg release/*.zip release/*.exe; do
-            [ -f "$FILE" ] || continue
-            FILENAME=$(basename "$FILE")
-
-            case "$FILE" in
-                *.dmg) CONTENT_TYPE="application/x-apple-diskimage" ;;
-                *.zip) CONTENT_TYPE="application/zip" ;;
-                *.exe) CONTENT_TYPE="application/x-msdownload" ;;
-            esac
-
-            # URL-encode the filename (spaces → %20) — literal spaces in URLs corrupt uploads
-            ENCODED_FILENAME="${FILENAME// /%20}"
-
-            echo "  ${GREEN}==> Uploading $FILENAME...${NC}"
-
-            UPLOAD_RESPONSE=$(curl -s -X POST \
-                -H "Authorization: token $GITHUB_TOKEN" \
-                -H "Content-Type: $CONTENT_TYPE" \
-                -H "Accept: application/vnd.github.v3+json" \
-                --data-binary @"$FILE" \
-                "https://uploads.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/$RELEASE_ID/assets?name=$ENCODED_FILENAME")
-
-            if echo "$UPLOAD_RESPONSE" | grep -q '"id"'; then
-                SIZE=$(echo "$UPLOAD_RESPONSE" | grep -o '"size": [0-9]*' | head -1 | grep -o '[0-9]*')
-                SIZE_MB=$((SIZE / 1048576))
-                echo "  Uploaded $FILENAME (${SIZE_MB}MB)"
-            else
-                echo "  ${RED}Error uploading $FILENAME:${NC}"
-                echo "$UPLOAD_RESPONSE"
-            fi
+            [ -f "$FILE" ] && ARTIFACTS+=("$FILE")
         done
+
+        if [ ${#ARTIFACTS[@]} -eq 0 ]; then
+            echo "  ${RED}No artifacts found to upload.${NC}"
+            exit 1
+        fi
+
+        echo "  Files to upload:"
+        for FILE in "${ARTIFACTS[@]}"; do
+            SIZE=$(ls -lh "$FILE" | awk '{print $5}')
+            echo "    $(basename "$FILE") ($SIZE)"
+        done
+        echo ""
+
+        # Create release and upload in one command
+        gh release create "v$VERSION" \
+            --repo "$GITHUB_OWNER/$GITHUB_REPO" \
+            --title "v$VERSION" \
+            --notes "Release v$VERSION" \
+            "${ARTIFACTS[@]}"
 
         RELEASE_URL="https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/download/v$VERSION"
 
@@ -290,10 +252,10 @@ case "$BUILD_CHOICE" in
         echo "  ${GREEN}==> Release published!${NC}"
         echo ""
         echo "  ${BOLD}Download URLs:${NC}"
-        for FILE in release/*.dmg release/*.zip release/*.exe; do
-            [ -f "$FILE" ] || continue
+        for FILE in "${ARTIFACTS[@]}"; do
             FILENAME=$(basename "$FILE")
-            echo "  ${CYAN}$RELEASE_URL/$FILENAME${NC}"
+            ENCODED="${FILENAME// /%20}"
+            echo "  ${CYAN}$RELEASE_URL/$ENCODED${NC}"
         done
         echo ""
         echo "  ${BOLD}Release page:${NC}"
