@@ -169,21 +169,32 @@ case "$BUILD_CHOICE" in
     echo "  ${GREEN}==> Building macOS (x64 + arm64)...${NC}"
     npx electron-builder --mac
 
-    # Notarize DMGs (electron-builder only notarizes the .app, not the DMG wrapper)
+    # Sign, notarize, and staple DMGs
+    # electron-builder notarizes the .app but the DMG wrapper needs its own signing + notarization
     if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
         for DMG in release/*.dmg; do
             [ -f "$DMG" ] || continue
-            echo "  ${GREEN}==> Notarizing $(basename "$DMG")...${NC}"
+            echo "  ${GREEN}==> Signing DMG: $(basename "$DMG")...${NC}"
+            codesign --force --sign "Developer ID Application" "$DMG"
+            echo "  ${GREEN}==> Notarizing DMG: $(basename "$DMG")...${NC}"
             xcrun notarytool submit "$DMG" \
                 --apple-id "$APPLE_ID" \
                 --password "$APPLE_APP_SPECIFIC_PASSWORD" \
                 --team-id "$APPLE_TEAM_ID" \
                 --wait
-            echo "  ${GREEN}==> Stapling $(basename "$DMG")...${NC}"
+            echo "  ${GREEN}==> Stapling DMG: $(basename "$DMG")...${NC}"
             xcrun stapler staple "$DMG"
         done
+
+        # Verify
+        echo ""
+        for DMG in release/*.dmg; do
+            [ -f "$DMG" ] || continue
+            echo "  Verifying $(basename "$DMG")..."
+            spctl --assess -vvv --type open "$DMG" 2>&1 | sed 's/^/    /'
+        done
     else
-        echo "  ${YELLOW}Skipping DMG notarization (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID not set)${NC}"
+        echo "  ${YELLOW}Skipping DMG signing/notarization (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID not set)${NC}"
     fi
 
     echo "  ${GREEN}==> Building Windows (x64 + arm64)...${NC}"
