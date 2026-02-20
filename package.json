@@ -31,7 +31,9 @@
       "icon": "icons/logo.png",
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
-      "notarize": true
+      "notarize": true,
+      "entitlements": "electron/entitlements.mac.plist",
+      "entitlementsInherit": "electron/entitlements.mac.inherit.plist"
     },
     "win": {
       "target": [
