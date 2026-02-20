@@ -169,67 +169,21 @@ case "$BUILD_CHOICE" in
     echo "  ${GREEN}==> Building macOS (x64 + arm64)...${NC}"
     npx electron-builder --mac
 
-    # Recreate DMGs as UDZO (HFS+) format
-    # electron-builder creates APFS DMGs on Apple Silicon which Gatekeeper can't assess
-    echo "  ${GREEN}==> Recreating DMGs as UDZO format...${NC}"
+    # electron-builder signs the .app, notarizes it, then packages it into the DMG.
+    # The .app inside the DMG is signed + notarized — that's all Gatekeeper needs.
+    # Do NOT sign/notarize the DMG itself — stapling invalidates the DMG's codesign,
+    # which causes "damaged and can't be opened" on Apple Silicon (arm64 requires
+    # valid signatures; x64 tolerates invalid ones with a weaker warning).
+
+    # Verify .app signatures
     for APP_DIR in release/mac release/mac-arm64; do
         [ -d "$APP_DIR" ] || continue
-
         APP_PATH="$APP_DIR/Cloud Platform.app"
         [ -d "$APP_PATH" ] || continue
-
-        if [ "$APP_DIR" = "release/mac-arm64" ]; then
-            ARCH_SUFFIX="-arm64"
-        else
-            ARCH_SUFFIX=""
-        fi
-
-        DMG_NAME="Cloud Platform-${VERSION}${ARCH_SUFFIX}.dmg"
-        DMG_PATH="release/$DMG_NAME"
-
-        # Remove electron-builder's APFS DMG
-        rm -f "$DMG_PATH"
-
-        # Create UDZO DMG with Applications symlink
-        STAGE_DIR=$(mktemp -d)
-        cp -R "$APP_PATH" "$STAGE_DIR/"
-        ln -s /Applications "$STAGE_DIR/Applications"
-
-        echo "  ${GREEN}==> Creating $DMG_NAME (UDZO/HFS+)...${NC}"
-        hdiutil create -volname "Cloud Platform" \
-            -srcfolder "$STAGE_DIR" \
-            -ov -format UDZO \
-            "$DMG_PATH"
-
-        rm -rf "$STAGE_DIR"
+        echo "  Verifying $(basename "$APP_DIR")/Cloud Platform.app..."
+        codesign --verify --deep --strict --verbose=2 "$APP_PATH" 2>&1 | sed 's/^/    /'
+        spctl --assess --type execute --verbose "$APP_PATH" 2>&1 | sed 's/^/    /'
     done
-
-    # Sign, notarize, and staple DMGs
-    if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
-        for DMG in release/*.dmg; do
-            [ -f "$DMG" ] || continue
-            echo "  ${GREEN}==> Signing DMG: $(basename "$DMG")...${NC}"
-            codesign --force --sign "Developer ID Application" "$DMG"
-            echo "  ${GREEN}==> Notarizing DMG: $(basename "$DMG")...${NC}"
-            xcrun notarytool submit "$DMG" \
-                --apple-id "$APPLE_ID" \
-                --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-                --team-id "$APPLE_TEAM_ID" \
-                --wait
-            echo "  ${GREEN}==> Stapling DMG: $(basename "$DMG")...${NC}"
-            xcrun stapler staple "$DMG"
-        done
-
-        # Verify
-        echo ""
-        for DMG in release/*.dmg; do
-            [ -f "$DMG" ] || continue
-            echo "  Verifying $(basename "$DMG")..."
-            spctl --assess -vvv --type open "$DMG" 2>&1 | sed 's/^/    /'
-        done
-    else
-        echo "  ${YELLOW}Skipping DMG signing/notarization (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID not set)${NC}"
-    fi
 
     echo "  ${GREEN}==> Building Windows (x64 + arm64)...${NC}"
     npx electron-builder --win

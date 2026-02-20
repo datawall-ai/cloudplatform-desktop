@@ -47,7 +47,7 @@
       "category": "Office"
     },
     "dmg": {
-      "sign": true
+      "sign": false
     },
     "nsis": {
       "oneClick": true,
