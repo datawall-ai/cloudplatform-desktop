@@ -1,0 +1,53 @@
+{
+  "name": "cloudplatform-desktop",
+  "private": true,
+  "version": "2026-02-20",
+  "description": "Cloud Platform desktop app — thin Electron shell loading c.datawall.ai",
+  "author": "Datawall AI",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --linux",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "ai.datawall.cloudplatform",
+    "productName": "Cloud Platform",
+    "files": [
+      "electron/**/*",
+      "icons/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "icons/logo.png",
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "icons/logo.png"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "icon": "icons/logo.png",
+      "category": "Office"
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false
+    },
+    "directories": {
+      "output": "release"
+    }
+  }
+}
