@@ -262,6 +262,9 @@ case "$BUILD_CHOICE" in
                 *.exe) CONTENT_TYPE="application/x-msdownload" ;;
             esac
 
+            # URL-encode the filename (spaces → %20) — literal spaces in URLs corrupt uploads
+            ENCODED_FILENAME="${FILENAME// /%20}"
+
             echo "  ${GREEN}==> Uploading $FILENAME...${NC}"
 
             UPLOAD_RESPONSE=$(curl -s -X POST \
@@ -269,7 +272,7 @@ case "$BUILD_CHOICE" in
                 -H "Content-Type: $CONTENT_TYPE" \
                 -H "Accept: application/vnd.github.v3+json" \
                 --data-binary @"$FILE" \
-                "https://uploads.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/$RELEASE_ID/assets?name=$FILENAME")
+                "https://uploads.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/$RELEASE_ID/assets?name=$ENCODED_FILENAME")
 
             if echo "$UPLOAD_RESPONSE" | grep -q '"id"'; then
                 SIZE=$(echo "$UPLOAD_RESPONSE" | grep -o '"size": [0-9]*' | head -1 | grep -o '[0-9]*')
