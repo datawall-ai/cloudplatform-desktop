@@ -55,11 +55,14 @@ echo "${CYAN}============================================${NC}"
 echo ""
 
 # ============================================
-# Step 1: Version (CalVer: YYYY-MM-DD)
+# Step 1: Version (CalVer: YYYY.M.D — semver-compatible date versioning)
 # ============================================
 
-# Auto-generate today's date version
-TODAY=$(date +%Y-%m-%d)
+# Auto-generate today's date as version (no leading zeros for semver compat)
+YEAR=$(date +%Y)
+MONTH=$(date +%-m)
+DAY=$(date +%-d)
+TODAY="${YEAR}.${MONTH}.${DAY}"
 
 # Check if a tag for today already exists, auto-increment if so
 SUGGESTED="$TODAY"
