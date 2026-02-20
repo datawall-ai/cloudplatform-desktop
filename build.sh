@@ -20,7 +20,7 @@ NC=$'\033[0m'
 # GitHub config
 GITHUB_OWNER="datawall-ai"
 GITHUB_REPO="cloudplatform-desktop"
-GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+GITHUB_TOKEN="REMOVED_TOKEN" 
 
 # Get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
