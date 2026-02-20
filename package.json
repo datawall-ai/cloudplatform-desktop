@@ -18,6 +18,7 @@
   "build": {
     "appId": "ai.datawall.cloudplatform",
     "productName": "Cloud Platform",
+    "artifactName": "CloudPlatform-${version}-${arch}.${ext}",
     "files": [
       "electron/**/*",
       "icons/**/*",
@@ -50,6 +51,7 @@
       "sign": false
     },
     "nsis": {
+      "artifactName": "CloudPlatform-Setup-${version}.${ext}",
       "oneClick": true,
       "allowToChangeInstallationDirectory": false
     },
