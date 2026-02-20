@@ -169,8 +169,42 @@ case "$BUILD_CHOICE" in
     echo "  ${GREEN}==> Building macOS (x64 + arm64)...${NC}"
     npx electron-builder --mac
 
+    # Recreate DMGs as UDZO (HFS+) format
+    # electron-builder creates APFS DMGs on Apple Silicon which Gatekeeper can't assess
+    echo "  ${GREEN}==> Recreating DMGs as UDZO format...${NC}"
+    for APP_DIR in release/mac release/mac-arm64; do
+        [ -d "$APP_DIR" ] || continue
+
+        APP_PATH="$APP_DIR/Cloud Platform.app"
+        [ -d "$APP_PATH" ] || continue
+
+        if [ "$APP_DIR" = "release/mac-arm64" ]; then
+            ARCH_SUFFIX="-arm64"
+        else
+            ARCH_SUFFIX=""
+        fi
+
+        DMG_NAME="Cloud Platform-${VERSION}${ARCH_SUFFIX}.dmg"
+        DMG_PATH="release/$DMG_NAME"
+
+        # Remove electron-builder's APFS DMG
+        rm -f "$DMG_PATH"
+
+        # Create UDZO DMG with Applications symlink
+        STAGE_DIR=$(mktemp -d)
+        cp -R "$APP_PATH" "$STAGE_DIR/"
+        ln -s /Applications "$STAGE_DIR/Applications"
+
+        echo "  ${GREEN}==> Creating $DMG_NAME (UDZO/HFS+)...${NC}"
+        hdiutil create -volname "Cloud Platform" \
+            -srcfolder "$STAGE_DIR" \
+            -ov -format UDZO \
+            "$DMG_PATH"
+
+        rm -rf "$STAGE_DIR"
+    done
+
     # Sign, notarize, and staple DMGs
-    # electron-builder notarizes the .app but the DMG wrapper needs its own signing + notarization
     if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
         for DMG in release/*.dmg; do
             [ -f "$DMG" ] || continue
