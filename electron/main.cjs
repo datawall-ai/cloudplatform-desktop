@@ -30,13 +30,44 @@ function createWindow() {
   });
 
   // Open external links in the system browser, not inside Electron
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  mainWindow.webContents.setWindowOpenHandler(({ url, frameName }) => {
     // Allow navigation within the app's own domain
     if (url.startsWith(REMOTE_URL)) {
       return { action: 'allow' };
     }
+
+    // Allow OAuth popups to open as child BrowserWindows so that
+    // sessionStorage (copied from opener per spec) and window.opener
+    // are preserved — required for the callback to read state and
+    // postMessage the result back.
+    const isOAuthPopup = frameName && (
+      frameName.startsWith('oauth_') || frameName === 'email_oauth'
+    );
+    if (isOAuthPopup) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 600,
+          height: 700,
+          title: 'Sign In',
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
+        },
+      };
+    }
+
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // Open external links clicked inside OAuth child windows in the system browser
+  mainWindow.webContents.on('did-create-window', (childWindow) => {
+    childWindow.webContents.setWindowOpenHandler(({ url }) => {
+      shell.openExternal(url);
+      return { action: 'deny' };
+    });
   });
 
   // Also handle in-page link clicks that try to navigate away
