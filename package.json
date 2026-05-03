@@ -1,7 +1,7 @@
 {
   "name": "cloudplatform-desktop",
   "private": true,
-  "version": "2026.2.20-14",
+  "version": "2026.5.2",
   "description": "Cloud Platform desktop app — thin Electron shell loading c.datawall.ai",
   "author": "Datawall AI",
   "main": "electron/main.cjs",
@@ -51,7 +51,7 @@
       "sign": false
     },
     "nsis": {
-      "artifactName": "CloudPlatform-Setup-${version}.${ext}",
+      "artifactName": "CloudPlatform-Setup-${version}-${arch}.${ext}",
       "oneClick": true,
       "allowToChangeInstallationDirectory": false
     },

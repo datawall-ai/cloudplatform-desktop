@@ -8,5 +8,12 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!--
+        Workplace Training is screen-capture only — no audio, no webcam.
+        macOS screen recording is governed by TCC (the "Screen Recording"
+        privacy panel) plus the Info.plist NSScreenCaptureUsageDescription
+        string at app-bundle build time. No audio/camera entitlements
+        needed; including them would force unnecessary permission prompts.
+    -->
 </dict>
 </plist>

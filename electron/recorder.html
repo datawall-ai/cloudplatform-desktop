@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; media-src *; img-src *">
+  <title>Cloud Platform Recorder</title>
+</head>
+<body>
+<!--
+  Hidden recorder window. Owned by main; never visible to the user. Runs
+  getUserMedia against a desktopCapturer source id, drives MediaRecorder
+  at chunkIntervalMs intervals, and pipes each chunk back to main via the
+  shared wt:append-chunk handler. Lifecycle is controlled by main:
+    main → recorder.html       (loadFile)
+    recorder.html → main       (ready()) → returns { sessionId, sourceId, ... }
+    recorder.html → main       (reportStarted) once MediaRecorder is running
+    main → recorder.html       (wt-recorder:stop) when user stops the session
+    recorder.html → main       (reportStopped) after final chunk has flushed
+  All errors route through reportError; main marks the session 'failed'.
+-->
+<script>
+(async () => {
+  const bridge = window.recorderBridge;
+  if (!bridge) return;
+
+  let config;
+  try {
+    config = await bridge.ready();
+  } catch (err) {
+    bridge.reportError('Failed to fetch recorder config: ' + (err && err.message ? err.message : err));
+    return;
+  }
+
+  if (!config || !config.sessionId || !config.sourceId) {
+    bridge.reportError('Recorder spawned without a valid session/source config');
+    return;
+  }
+
+  const { sessionId, sourceId } = config;
+  const chunkIntervalMs = config.chunkIntervalMs || 5000;
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: sourceId,
+          maxFrameRate: 15,
+        },
+      },
+    });
+  } catch (err) {
+    // Most likely cause on macOS: TCC has not granted Screen Recording permission.
+    // The user has to grant it in System Settings → Privacy & Security → Screen
+    // Recording, then restart the app. We surface the OS error verbatim so the
+    // panel can show a helpful message rather than a silent failure.
+    const name = (err && err.name) || 'Error';
+    const msg = (err && err.message) || String(err);
+    bridge.reportError('getUserMedia failed: ' + name + ': ' + msg);
+    return;
+  }
+
+  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+    ? 'video/webm;codecs=vp9'
+    : 'video/webm';
+
+  const recorder = new MediaRecorder(stream, {
+    mimeType,
+    videoBitsPerSecond: 2_000_000,
+  });
+
+  let chunkIndex = 0;
+  let stopReported = false;
+
+  recorder.ondataavailable = async (event) => {
+    if (!event.data || event.data.size === 0) return;
+    const idx = chunkIndex;
+    chunkIndex += 1;
+    try {
+      const buffer = await event.data.arrayBuffer();
+      await bridge.appendChunk(sessionId, idx, buffer);
+    } catch (err) {
+      bridge.reportError('Chunk write failed at index ' + idx + ': ' + (err && err.message ? err.message : err));
+    }
+  };
+
+  recorder.onerror = (event) => {
+    const err = event && event.error;
+    bridge.reportError('MediaRecorder error: ' + ((err && err.message) || 'unknown'));
+  };
+
+  recorder.onstop = () => {
+    try {
+      stream.getTracks().forEach((t) => t.stop());
+    } catch (_) { /* no-op */ }
+    if (!stopReported) {
+      stopReported = true;
+      bridge.reportStopped();
+    }
+  };
+
+  bridge.onStop(() => {
+    if (recorder.state !== 'inactive') {
+      try {
+        recorder.stop();
+      } catch (err) {
+        bridge.reportError('Stop failed: ' + (err && err.message ? err.message : err));
+      }
+    }
+  });
+
+  // If the underlying capture source ends (user revokes screen recording
+  // permission mid-session, source window closes, etc.), stop cleanly.
+  const videoTrack = stream.getVideoTracks()[0];
+  if (videoTrack) {
+    videoTrack.addEventListener('ended', () => {
+      if (recorder.state !== 'inactive') {
+        try { recorder.stop(); } catch (_) { /* no-op */ }
+      }
+    });
+  }
+
+  try {
+    recorder.start(chunkIntervalMs);
+    bridge.reportStarted();
+  } catch (err) {
+    bridge.reportError('Failed to start MediaRecorder: ' + (err && err.message ? err.message : err));
+  }
+})();
+</script>
+</body>
+</html>

@@ -42,6 +42,44 @@ detect_os() {
 HOST_OS=$(detect_os)
 CURRENT_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")
 
+# Build the Windows installers (x64 + arm64 NSIS) inside the official
+# electronuserland/builder:wine image. Cross-compiling NSIS from macOS
+# directly is fragile (Wine + electron-builder version drift); Docker
+# pins everything and produces deterministic artifacts. node_modules
+# and the electron caches live in named volumes so re-runs are fast
+# and don't clobber the host's macOS-built node_modules.
+build_windows_in_docker() {
+    if ! command -v docker &>/dev/null; then
+        echo "  ${RED}Docker is required for Windows cross-builds.${NC}"
+        echo "  Install Docker Desktop: https://docs.docker.com/desktop/install/mac-install/"
+        return 1
+    fi
+    if ! docker info &>/dev/null; then
+        echo "  ${RED}Docker is installed but not running. Start Docker Desktop first.${NC}"
+        return 1
+    fi
+
+    local IMAGE="electronuserland/builder:wine"
+    local NAME_PREFIX="cloudplatform-desktop"
+
+    if ! docker image inspect "$IMAGE" &>/dev/null; then
+        echo "  ${GREEN}==> Pulling $IMAGE (one-time, ~1.5GB)...${NC}"
+        docker pull "$IMAGE"
+    fi
+
+    echo "  ${GREEN}==> Building Windows (x64 + arm64) inside $IMAGE...${NC}"
+    docker run --rm \
+        --env ELECTRON_CACHE="/root/.cache/electron" \
+        --env ELECTRON_BUILDER_CACHE="/root/.cache/electron-builder" \
+        -v "$SCRIPT_DIR:/project" \
+        -v "${NAME_PREFIX}-node-modules:/project/node_modules" \
+        -v "${NAME_PREFIX}-electron-cache:/root/.cache/electron" \
+        -v "${NAME_PREFIX}-electron-builder-cache:/root/.cache/electron-builder" \
+        -w /project \
+        "$IMAGE" \
+        /bin/bash -lc "set -e; npm install --no-audit --no-fund --prefer-offline; npx electron-builder --win"
+}
+
 # ============================================
 # Header
 # ============================================
@@ -185,8 +223,10 @@ case "$BUILD_CHOICE" in
         spctl --assess --type execute --verbose "$APP_PATH" 2>&1 | sed 's/^/    /'
     done
 
-    echo "  ${GREEN}==> Building Windows (x64 + arm64)...${NC}"
-    npx electron-builder --win
+    echo "  ${GREEN}==> Building Windows (x64 + arm64) via Docker...${NC}"
+    if ! build_windows_in_docker; then
+        echo "  ${YELLOW}Skipping Windows artifacts.${NC} Mac builds above are still valid."
+    fi
 
     echo ""
     echo "  ${GREEN}==> Build complete:${NC}"
