@@ -16,10 +16,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // for a future renderer gesture (e.g. long-press the logo) that lets
   // internal users hop between local and prod without restarting.
   app: {
-    version: 1,
+    // v2: setEnvironmentUrl + dev-mode menu toggle.
+    version: 2,
     getEnvironment: () => ipcRenderer.invoke('app:get-environment'),
     listEnvironments: () => ipcRenderer.invoke('app:list-environments'),
     setEnvironment: (key) => ipcRenderer.invoke('app:set-environment', key),
+    // Override the URL for a customizable env (just 'local' today). Pass
+    // an empty string or null to revert to the default. Reloads the
+    // window if the override targets the currently-active env.
+    setEnvironmentUrl: (key, url) => ipcRenderer.invoke('app:set-environment-url', key, url),
     reload: () => ipcRenderer.invoke('app:reload'),
   },
 

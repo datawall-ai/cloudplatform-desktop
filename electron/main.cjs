@@ -1,9 +1,66 @@
 const { app, BrowserWindow, shell, Menu, ipcMain } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const workplaceTraining = require('./workplaceTraining.cjs');
 const environment = require('./environment.cjs');
 
 let mainWindow;
+
+// Dev mode toggles whether the native menu bar is visible. Off by default
+// in packaged (production) builds so end users get a clean window; on by
+// default in unpackaged dev so we don't trip ourselves up. Toggleable at
+// any time via Ctrl/Cmd+Shift+D — handler installed in createWindow().
+const isMac = process.platform === 'darwin';
+let devMode = !app.isPackaged;
+
+function devModeFile() {
+  return path.join(app.getPath('userData'), 'dev-mode.json');
+}
+
+function readPersistedDevMode() {
+  try {
+    const data = JSON.parse(fs.readFileSync(devModeFile(), 'utf8'));
+    if (typeof data.devMode === 'boolean') return data.devMode;
+  } catch { /* first run */ }
+  return null;
+}
+
+function writePersistedDevMode(value) {
+  try {
+    fs.writeFileSync(devModeFile(), JSON.stringify({ devMode: value }, null, 2));
+  } catch (err) {
+    console.warn('[main] failed to persist dev mode', err && err.message);
+  }
+}
+
+function applyDevMode() {
+  // macOS apps must keep their menu — system menu bar is at the top of
+  // the screen and removing it breaks copy/paste shortcuts and the app
+  // menu. We still flip devMode for parity / future use.
+  if (isMac) {
+    Menu.setApplicationMenu(buildMenuTemplate());
+    return;
+  }
+  if (devMode) {
+    Menu.setApplicationMenu(buildMenuTemplate());
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setAutoHideMenuBar(false);
+      mainWindow.setMenuBarVisibility(true);
+    }
+  } else {
+    Menu.setApplicationMenu(null);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setMenuBarVisibility(false);
+      mainWindow.setAutoHideMenuBar(true);
+    }
+  }
+}
+
+function toggleDevMode() {
+  devMode = !devMode;
+  writePersistedDevMode(devMode);
+  applyDevMode();
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -78,18 +135,29 @@ function createWindow() {
       shell.openExternal(url);
     }
   });
+
+  // Dev-mode toggle chord: Ctrl+Shift+D (Cmd+Shift+D on macOS). Listening
+  // at before-input-event means the chord works regardless of menu
+  // visibility — important since the menu IS the thing being toggled.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const mod = isMac ? input.meta : input.control;
+    if (mod && input.shift && (input.key === 'D' || input.key === 'd')) {
+      event.preventDefault();
+      toggleDevMode();
+    }
+  });
 }
 
 function switchEnvironment(key) {
   environment.setActive(key);
-  buildMenu();
+  applyDevMode();
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.loadURL(environment.getCurrent().url);
   }
 }
 
-function buildMenu() {
-  const isMac = process.platform === 'darwin';
+function buildMenuTemplate() {
   const current = environment.getCurrent();
 
   // Radio items reflect the persisted active env; clicking switches and
@@ -168,7 +236,7 @@ function buildMenu() {
     },
   ];
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  return Menu.buildFromTemplate(template);
 }
 
 app.whenReady().then(() => {
@@ -183,13 +251,32 @@ app.whenReady().then(() => {
     switchEnvironment(key);
     return environment.getCurrent();
   });
+  ipcMain.handle('app:set-environment-url', (_event, key, url) => {
+    // Override the URL for a customizable env (today: just 'local'). If
+    // the override targets the *active* env, reload the window so the
+    // user lands on the new URL immediately.
+    const updated = environment.setCustomUrl(key, url);
+    applyDevMode();
+    if (key === environment.getCurrent().key && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(environment.getCurrent().url);
+    }
+    return updated;
+  });
   ipcMain.handle('app:reload', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.loadURL(environment.getCurrent().url);
     }
   });
+  ipcMain.handle('app:get-dev-mode', () => devMode);
+  ipcMain.handle('app:toggle-dev-mode', () => {
+    toggleDevMode();
+    return devMode;
+  });
 
-  buildMenu();
+  // Restore persisted dev mode (overrides the !app.isPackaged default).
+  const persistedDev = readPersistedDevMode();
+  if (persistedDev !== null) devMode = persistedDev;
+  applyDevMode();
   // Register Workplace Training IPC handlers + tray indicator before the
   // window opens so the renderer never sees a missing-handler error if the
   // page boots fast and queries the bridge immediately.
