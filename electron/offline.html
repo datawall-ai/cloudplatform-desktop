@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
   <title>Cloud Platform - Offline</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -13,40 +14,248 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      height: 100vh;
+      min-height: 100vh;
       text-align: center;
+      padding: 2rem;
     }
-    .container { max-width: 420px; padding: 2rem; }
+    .container { max-width: 520px; width: 100%; }
     h1 {
       font-size: 1.5rem;
       font-weight: 600;
-      margin-bottom: 0.75rem;
+      margin-bottom: 0.5rem;
       color: #ffffff;
     }
-    p {
-      font-size: 0.95rem;
-      line-height: 1.6;
-      color: #888;
-      margin-bottom: 2rem;
-    }
-    button {
-      background: rgba(255, 255, 255, 0.1);
-      color: #ffffff;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      padding: 0.65rem 1.75rem;
-      border-radius: 8px;
+    .subtitle {
       font-size: 0.9rem;
-      cursor: pointer;
-      transition: background 0.2s;
+      line-height: 1.5;
+      color: #888;
+      margin-bottom: 1.5rem;
     }
-    button:hover { background: rgba(255, 255, 255, 0.18); }
+    .target-url {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #ddd;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 0.4rem 0.7rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      display: inline-block;
+      margin-bottom: 1.5rem;
+      word-break: break-all;
+    }
+    .panel {
+      background: #1a1a1a;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 1rem;
+      text-align: left;
+      margin-bottom: 1rem;
+    }
+    .panel-title {
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+      margin-bottom: 0.6rem;
+    }
+    .env-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.55rem 0.7rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 8px;
+      margin-bottom: 0.5rem;
+      gap: 8px;
+    }
+    .env-row.active {
+      background: rgba(100, 180, 255, 0.12);
+      border-color: rgba(100, 180, 255, 0.35);
+    }
+    .env-meta { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+    .env-label { font-weight: 600; font-size: 0.9rem; color: #fff; }
+    .env-url { font-family: ui-monospace, monospace; font-size: 0.72rem; color: #888; word-break: break-all; }
+    .env-active-tag { font-size: 0.7rem; opacity: 0.7; margin-left: 6px; }
+    button.secondary, button.primary, .reset-btn {
+      cursor: pointer;
+      font-size: 0.8rem;
+      border-radius: 6px;
+      padding: 0.35rem 0.8rem;
+      transition: background 0.15s;
+    }
+    button.primary {
+      background: rgba(100, 180, 255, 0.2);
+      border: 1px solid rgba(100, 180, 255, 0.4);
+      color: #fff;
+    }
+    button.primary:hover { background: rgba(100, 180, 255, 0.3); }
+    button.secondary {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #fff;
+    }
+    button.secondary:hover { background: rgba(255, 255, 255, 0.08); }
+    .url-input-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .url-input {
+      flex: 1;
+      padding: 0.32rem 0.5rem;
+      font-size: 0.78rem;
+      font-family: ui-monospace, monospace;
+      background: rgba(0, 0, 0, 0.4);
+      color: #ddd;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+    }
+    .url-input:focus {
+      outline: none;
+      border-color: rgba(100, 180, 255, 0.5);
+    }
+    .reset-btn {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #ccc;
+      font-size: 0.7rem;
+    }
+    .actions {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+      margin-top: 1rem;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Unable to connect</h1>
-    <p>Cloud Platform couldn't reach the server. Check your internet connection and try again.</p>
-    <button onclick="window.electronAPI && window.electronAPI.app.reload()">Retry</button>
+    <p class="subtitle">Cloud Platform couldn't reach the server. Switch environments below, or retry once the server is back up.</p>
+    <div id="target-url-wrap"></div>
+
+    <div class="panel" id="env-panel">
+      <div class="panel-title">Switch Environment</div>
+      <div id="env-list">Loading…</div>
+    </div>
+
+    <div class="actions">
+      <button class="secondary" onclick="window.electronAPI && window.electronAPI.app.reload()">Retry</button>
+    </div>
   </div>
+
+<script>
+(async () => {
+  const bridge = window.electronAPI && window.electronAPI.app;
+  const list = document.getElementById('env-list');
+  const targetWrap = document.getElementById('target-url-wrap');
+
+  if (!bridge || !bridge.listEnvironments) {
+    list.textContent = 'Environment switcher unavailable in this build.';
+    return;
+  }
+
+  async function render() {
+    const [envs, current] = await Promise.all([
+      bridge.listEnvironments(),
+      bridge.getEnvironment(),
+    ]);
+    targetWrap.innerHTML =
+      '<div class="target-url">Tried: ' + escapeHtml(current.url) + '</div>';
+
+    list.innerHTML = '';
+    for (const env of envs) {
+      const isActive = env.key === current.key;
+      const row = document.createElement('div');
+      row.className = 'env-row' + (isActive ? ' active' : '');
+
+      const meta = document.createElement('div');
+      meta.className = 'env-meta';
+      meta.innerHTML =
+        '<div class="env-label">' + escapeHtml(env.label) +
+        (isActive ? '<span class="env-active-tag">· active</span>' : '') +
+        '</div>';
+
+      // For non-customizable envs, show the URL inline. For customizable
+      // ones (just `local` today) render an editable input below the row.
+      if (!env.customizable) {
+        const u = document.createElement('div');
+        u.className = 'env-url';
+        u.textContent = env.url;
+        meta.appendChild(u);
+      }
+
+      const useBtn = document.createElement('button');
+      useBtn.className = 'primary';
+      useBtn.textContent = isActive ? 'Reload' : 'Use';
+      useBtn.onclick = async () => {
+        if (env.customizable) {
+          // Persist whatever's in the input first so the reload picks up
+          // the latest URL.
+          const input = document.getElementById('url-input-' + env.key);
+          if (input && input.value.trim() !== env.url) {
+            await bridge.setEnvironmentUrl(env.key, input.value.trim());
+          }
+        }
+        await bridge.setEnvironment(env.key);
+      };
+
+      row.appendChild(meta);
+      row.appendChild(useBtn);
+      list.appendChild(row);
+
+      if (env.customizable) {
+        const inputRow = document.createElement('div');
+        inputRow.className = 'url-input-row';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'url-input';
+        input.id = 'url-input-' + env.key;
+        input.value = env.url;
+        input.placeholder = env.defaultUrl;
+        input.addEventListener('keydown', async (e) => {
+          if (e.key === 'Enter') {
+            await bridge.setEnvironmentUrl(env.key, input.value.trim());
+            await bridge.setEnvironment(env.key);
+          }
+        });
+        input.addEventListener('blur', async () => {
+          if (input.value.trim() !== env.url) {
+            await bridge.setEnvironmentUrl(env.key, input.value.trim());
+            await render();
+          }
+        });
+        inputRow.appendChild(input);
+
+        if (env.url !== env.defaultUrl) {
+          const reset = document.createElement('button');
+          reset.className = 'reset-btn';
+          reset.textContent = 'Reset';
+          reset.title = 'Reset to ' + env.defaultUrl;
+          reset.onclick = async () => {
+            await bridge.setEnvironmentUrl(env.key, '');
+            await render();
+          };
+          inputRow.appendChild(reset);
+        }
+
+        // Append the input row directly under the env row.
+        const wrapper = document.createElement('div');
+        wrapper.style.marginBottom = '0.5rem';
+        wrapper.appendChild(inputRow);
+        list.appendChild(wrapper);
+      }
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
+  await render();
+})();
+</script>
 </body>
 </html>
