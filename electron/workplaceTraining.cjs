@@ -472,6 +472,9 @@ ipcMain.handle('wt:set-upload-config', (_event, cfg = {}) => {
   // Hand the same credentials to the presence module so it can register
   // this desktop install + start heartbeating.
   desktopPresence.setCredentials(uploadConfig);
+  // Re-render the tray so the "Start screen recording" item flips from
+  // disabled → enabled the moment we have credentials.
+  trayMenuRefresh();
   return { ok: true };
 });
 
@@ -493,10 +496,15 @@ ipcMain.handle('wt:list-sources', async () => {
   }));
 });
 
-ipcMain.handle('wt:start', async (_event, opts = {}) => {
+// Start a new session. Callable from the wt:start IPC handler (renderer-
+// initiated, typically with workflow context) and from the tray menu
+// (main-initiated, no workflow context — recording goes to the workspace
+// KB without a workflow_id/run_id binding). The server treats both the
+// same; sessionMeta is freeform and workflow_id is just a nullable column.
+function startNewSession(opts = {}) {
   const { sourceId, sourceLabel = '', sessionMeta = {} } = opts;
   if (!sourceId) {
-    throw new Error('startSession requires { sourceId }');
+    throw new Error('startNewSession requires { sourceId }');
   }
   const sessionId = randomUUID();
   const session = {
@@ -536,8 +544,52 @@ ipcMain.handle('wt:start', async (_event, opts = {}) => {
     failSession(session, 'Failed to spawn recorder window: ' + (err && err.message ? err.message : err));
   });
 
+  return session;
+}
+
+ipcMain.handle('wt:start', async (_event, opts = {}) => {
+  const session = startNewSession(opts);
   return publicSessionView(session);
 });
+
+// Tray-initiated recording. Auto-picks the primary screen and starts a
+// session with no workflow context — the recording lands in the workspace
+// KB with workflow_id=null, run_id=null. Requires uploadConfig to have
+// been seeded by a previous renderer mount (so we have a JWT).
+async function startTrayRecording() {
+  if (!uploadConfig) {
+    console.warn('[wt] tray recording: no upload config yet — open the app once first');
+    return null;
+  }
+  // Don't double-start if something is already capturing.
+  for (const s of sessions.values()) {
+    if (s.status === 'starting' || s.status === 'recording') {
+      return s; // already recording, no-op
+    }
+  }
+  let sources = [];
+  try {
+    sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      fetchWindowIcons: false,
+      thumbnailSize: { width: 0, height: 0 },
+    });
+  } catch (err) {
+    console.warn('[wt] tray recording: getSources failed', err && err.message);
+    return null;
+  }
+  const primary = sources[0];
+  if (!primary) {
+    console.warn('[wt] tray recording: no screens available');
+    return null;
+  }
+  const session = startNewSession({
+    sourceId: primary.id,
+    sourceLabel: primary.name,
+    sessionMeta: { startedFrom: 'tray' },
+  });
+  return session;
+}
 
 ipcMain.handle('wt:stop', async (_event, sessionId) => {
   const session = sessions.get(sessionId);
@@ -650,17 +702,65 @@ function createTray() {
   tray = new Tray(icon);
   trayMenuRefresh = () => {
     const active = Array.from(sessions.values()).filter((s) => s.status === 'recording' || s.status === 'starting');
-    const items = active.length === 0
-      ? [{ label: 'Workplace Training: idle', enabled: false }]
-      : active.flatMap((s) => [
-          { label: `Recording: ${s.sourceLabel || s.sourceId}`, enabled: false },
-          { label: `Stop "${s.sourceLabel || 'session'}"`, click: () => {
+    const items = [];
+
+    if (active.length === 0) {
+      items.push({ label: 'Workplace Training: idle', enabled: false });
+      // Top-level "Start recording" entry — the desktop's only door to a
+      // recording that isn't tied to a specific workflow run. Auto-picks
+      // the primary screen; sessionMeta has no workflow_id so the
+      // recording lands in the workspace's KB as standalone training
+      // material. Disabled until uploadConfig has been seeded by a
+      // previous renderer mount (without it we have no JWT for UAC).
+      items.push({
+        label: uploadConfig
+          ? 'Start screen recording (primary display)'
+          : 'Start screen recording — open the app first to authenticate',
+        enabled: !!uploadConfig,
+        click: () => {
+          startTrayRecording().catch((err) => {
+            console.warn('[wt] tray start failed', err && err.message);
+          });
+        },
+      });
+    } else {
+      for (const s of active) {
+        items.push({ label: `Recording: ${s.sourceLabel || s.sourceId}`, enabled: false });
+        items.push({
+          label: `Stop "${s.sourceLabel || 'session'}"`,
+          click: () => {
+            // Tray-started sessions have no renderer panel listening for
+            // 'stop-requested', so call the stop path directly. Renderer-
+            // started sessions get the same treatment — wt:stop is what
+            // the panel would have invoked anyway.
+            const fromTray = s.sessionMeta && s.sessionMeta.startedFrom === 'tray';
+            if (fromTray) {
+              ipcMain.emit('wt:stop', { sender: null }, s.id);
+              // ipcMain.emit doesn't actually invoke handle()'d handlers —
+              // call the underlying logic directly.
+              const session = sessions.get(s.id);
+              if (!session) return;
+              if (session.status === 'stopped' || session.status === 'failed') return;
+              session.status = 'stopping';
+              broadcastSessionEvent('stopping', session);
+              const win = recorderWindows.get(s.id);
+              if (win && !win.isDestroyed()) {
+                win.webContents.send('wt-recorder:stop');
+              } else {
+                finalizeSession(session);
+              }
+            } else {
+              // Renderer-driven session: ask the renderer to stop so the
+              // panel UI updates in step.
               for (const win of BrowserWindow.getAllWindows()) {
                 win.webContents.send('wt:event', { event: 'stop-requested', session: publicSessionView(s) });
               }
-            } },
-          { type: 'separator' },
-        ]);
+            }
+          },
+        });
+        items.push({ type: 'separator' });
+      }
+    }
     items.push({ role: 'quit', label: 'Quit Cloud Platform' });
     tray.setContextMenu(Menu.buildFromTemplate(items));
     tray.setToolTip(active.length === 0
