@@ -869,8 +869,8 @@ function createTray() {
     const items = [];
 
     if (active.length === 0) {
-      items.push({ label: 'Workplace Training: idle', enabled: false });
-      // Top-level "Start recording" entry — the desktop's only door to a
+      items.push({ label: 'Brend: not learning right now', enabled: false });
+      // Top-level "show Brend" entry — the desktop's only door to a
       // recording that isn't tied to a specific workflow run. Auto-picks
       // the primary screen; sessionMeta has no workflow_id so the
       // recording lands in the workspace's KB as standalone training
@@ -878,8 +878,8 @@ function createTray() {
       // previous renderer mount (without it we have no JWT for UAC).
       items.push({
         label: uploadConfig
-          ? 'Start screen recording (primary display)'
-          : 'Start screen recording — open the app first to authenticate',
+          ? 'Show Brend what you\'re doing (primary display)'
+          : 'Show Brend — open the app first to sign in',
         enabled: !!uploadConfig,
         click: () => {
           startTrayRecording().catch((err) => {
@@ -889,9 +889,9 @@ function createTray() {
       });
     } else {
       for (const s of active) {
-        items.push({ label: `Recording: ${s.sourceLabel || s.sourceId}`, enabled: false });
+        items.push({ label: `Brend is watching: ${s.sourceLabel || s.sourceId}`, enabled: false });
         items.push({
-          label: `Stop "${s.sourceLabel || 'session'}"`,
+          label: `Stop showing "${s.sourceLabel || 'this'}"`,
           click: () => {
             // Tray-started sessions have no renderer panel listening for
             // 'stop-requested', so call the stop path directly. Renderer-
@@ -928,8 +928,8 @@ function createTray() {
     items.push({ role: 'quit', label: 'Quit Cloud Platform' });
     tray.setContextMenu(Menu.buildFromTemplate(items));
     tray.setToolTip(active.length === 0
-      ? 'Cloud Platform — Workplace Training idle'
-      : `Cloud Platform — recording ${active.length} session(s)`);
+      ? 'Cloud Platform — Brend is idle'
+      : `Cloud Platform — Brend is learning from ${active.length} screen${active.length === 1 ? '' : 's'}`);
   };
   trayMenuRefresh();
   return tray;
