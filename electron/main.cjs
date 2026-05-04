@@ -108,8 +108,16 @@ function createWindow() {
     // sessionStorage (copied from opener per spec) and window.opener
     // are preserved — required for the callback to read state and
     // postMessage the result back.
+    //
+    // Frame names in the cloudplatform code:
+    //   integrations: 'oauth_popup'                     → matches startsWith('oauth_')
+    //   email:        'email_oauth_gmail|outlook|...'   → matches startsWith('email_oauth')
+    // Without the email_oauth prefix match, those popups fell through
+    // to shell.openExternal and the renderer thought the popup was
+    // blocked — sign-in then completed in the system browser where
+    // the callback couldn't postMessage back to the Electron app.
     const isOAuthPopup = frameName && (
-      frameName.startsWith('oauth_') || frameName === 'email_oauth'
+      frameName.startsWith('oauth_') || frameName.startsWith('email_oauth')
     );
     if (isOAuthPopup) {
       return {
