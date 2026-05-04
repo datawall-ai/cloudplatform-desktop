@@ -35,13 +35,13 @@ const ENVIRONMENTS = {
   },
   dev: {
     label: 'Dev',
-    defaultFrontendUrl: 'https://cloudplatform-dev.datawall.ai',
+    defaultFrontendUrl: 'https://cloudplatform-dev.k8s.datawall.ai',
     defaultUacUrl: 'https://prd.buldak-server-2.datawall.ai/uac',
     customizable: true,
   },
   prod: {
     label: 'Production',
-    defaultFrontendUrl: 'https://c.datawall.ai',
+    defaultFrontendUrl: 'https://cloudplatform.k8s.datawall.ai',
     defaultUacUrl: 'https://prd.buldak-server-2.datawall.ai/uac',
     customizable: false,
   },

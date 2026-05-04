@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 /**
- * The web app at c.datawall.ai feature-detects the desktop bridge by
+ * The web app at cloudplatform.k8s.datawall.ai feature-detects the desktop bridge by
  * reading window.electronAPI. New capability surfaces should be nested
  * under their own namespace and carry a `version` so the web app can
  * gracefully gate on capability presence — `if (electronAPI.x?.version >= N)`
