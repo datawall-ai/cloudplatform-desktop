@@ -388,7 +388,8 @@ function appendWindowSample(session, sample) {
     last.untilTs = sample.ts;
     return;
   }
-  session.windowSeries.push({ ts: sample.ts, app: sample.app, title: sample.title });
+  const entry = { ts: sample.ts, app: sample.app, title: sample.title };
+  session.windowSeries.push(entry);
   // Hard cap — drop oldest entries if we exceed the budget. Better to
   // lose early history than to crash the manifest writer with a 50MB blob.
   if (session.windowSeries.length > WINDOW_SERIES_MAX) {
@@ -398,6 +399,38 @@ function appendWindowSample(session, sample) {
     writeManifest(session.id, { windowSeries: session.windowSeries });
   } catch {
     // Manifest dir may be gone if the session was just finalized — ignore.
+  }
+  // Live-mode push to UAC. Fire-and-forget — if the network is down or
+  // the session isn't registered server-side yet, we just lose this
+  // sample's live evaluation; the local manifest still has it for the
+  // finalize-time safety-net pass. We send only the new entry, not the
+  // whole series, since the server appends.
+  pushWindowSampleToServer(session, entry).catch(() => { /* silent */ });
+}
+
+async function pushWindowSampleToServer(session, entry) {
+  const cfg = session.uploadConfig;
+  if (!cfg || !cfg.apiBase || !cfg.jwt || !cfg.workspaceId) return;
+  // Don't push if the session has already terminated (we may have a
+  // late tick mid-flight) or never registered server-side.
+  if (session.status === 'stopped' || session.status === 'failed') return;
+  if (!session.serverRegistered) return;
+  const url = cfg.apiBase.replace(/\/$/, '') + '/observability/sessions/' + session.id + '/window-samples';
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + cfg.jwt,
+        'X-Workspace-ID': cfg.workspaceId,
+      },
+      body: JSON.stringify({ samples: [entry] }),
+    });
+    // Silent on response code — non-2xx still drops the sample on the
+    // server side, and we don't want to spam the console. The session's
+    // window_series stays intact locally for the finalize-time pass.
+  } catch {
+    // Network error — same reasoning. Live evaluation is best-effort.
   }
 }
 
