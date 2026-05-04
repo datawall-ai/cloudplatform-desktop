@@ -68,7 +68,7 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    title: 'Cloud Platform',
+    title: `Cloud Platform – v${app.getVersion()}`,
     icon: path.join(__dirname, '..', 'icons', 'logo.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -84,6 +84,17 @@ function createWindow() {
     // Ignore aborted loads (e.g. navigation interrupted by a new load)
     if (errorCode === -3) return;
     mainWindow.loadFile(path.join(__dirname, 'offline.html'));
+  });
+
+  // Pin the title bar to "Cloud Platform – v<version>" — without this,
+  // the renderer's <title> tag would override on every page load. Prevent
+  // the default and re-set our own; the version comes from package.json.
+  const pinnedTitle = `Cloud Platform – v${app.getVersion()}`;
+  mainWindow.webContents.on('page-title-updated', (event) => {
+    event.preventDefault();
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.getTitle() !== pinnedTitle) {
+      mainWindow.setTitle(pinnedTitle);
+    }
   });
 
   // Open external links in the system browser, not inside Electron
@@ -246,21 +257,34 @@ app.whenReady().then(() => {
 
   // Renderer-side IPC for env (offline.html retry, future logo gesture).
   ipcMain.handle('app:get-environment', () => environment.getCurrent());
+  // Synchronous channel — preload uses sendSync so cloudplatform service
+  // modules can read the UAC URL at top-level const init time, before
+  // any async fetch happens. sendSync is discouraged in general but
+  // appropriate here: it's one boot-time call, no I/O.
+  ipcMain.on('app:get-environment-sync', (event) => {
+    event.returnValue = environment.getCurrent();
+  });
   ipcMain.handle('app:list-environments', () => environment.listAll());
   ipcMain.handle('app:set-environment', (_event, key) => {
     switchEnvironment(key);
     return environment.getCurrent();
   });
   ipcMain.handle('app:set-environment-url', (_event, key, url) => {
-    // Override the URL for a customizable env (today: just 'local'). If
-    // the override targets the *active* env, reload the window so the
-    // user lands on the new URL immediately.
+    // Override the frontend URL for a customizable env. If the override
+    // targets the *active* env, reload the window so the user lands on
+    // the new URL immediately.
     const updated = environment.setCustomUrl(key, url);
     applyDevMode();
     if (key === environment.getCurrent().key && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.loadURL(environment.getCurrent().url);
     }
     return updated;
+  });
+  ipcMain.handle('app:set-environment-uac-url', (_event, key, url) => {
+    // Override the UAC API URL for a customizable env. The renderer
+    // reads this on the next page load (or via getEnvironment polling)
+    // — no window reload needed because the frontend URL didn't change.
+    return environment.setCustomUacUrl(key, url);
   });
   ipcMain.handle('app:reload', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {

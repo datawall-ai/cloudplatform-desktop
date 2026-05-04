@@ -126,13 +126,13 @@ async function registerSessionOnServer(session) {
     });
     if (res.ok) {
       session.serverRegistered = true;
-    } else {
-      // 401 here means the JWT we were handed was already expired; log and
-      // give up — the panel will hand us a fresh config on its next mount.
-      console.warn('[wt] register session failed', res.status, await res.text().catch(() => ''));
     }
-  } catch (err) {
-    console.warn('[wt] register session error', err && err.message);
+    // Silent on non-2xx — register is fire-and-forget. The drainer/patch
+    // path will retry on its own cadence; spamming the console on every
+    // failure when UAC is unreachable doesn't help anyone.
+  } catch {
+    // Network error — same reasoning. Drainer surfaces real problems if
+    // they persist; transient unreachability isn't worth a warn.
   }
 }
 
@@ -324,7 +324,7 @@ async function patchSessionOnServer(session, patch) {
   if (!cfg || !cfg.apiBase || !cfg.jwt || !cfg.workspaceId) return;
   const url = cfg.apiBase.replace(/\/$/, '') + '/observability/sessions/' + session.id;
   try {
-    const res = await fetch(url, {
+    await fetch(url, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -333,11 +333,10 @@ async function patchSessionOnServer(session, patch) {
       },
       body: JSON.stringify(patch),
     });
-    if (!res.ok) {
-      console.warn('[wt] patch session failed', res.status, await res.text().catch(() => ''));
-    }
-  } catch (err) {
-    console.warn('[wt] patch session error', err && err.message);
+    // Silent on failure — patch is fire-and-forget. Drainer's next retry
+    // will catch it up if there's a real problem.
+  } catch {
+    // Network unreachable — silent. Drainer handles persistent issues.
   }
 }
 
@@ -611,11 +610,15 @@ async function stopContinuousSession(reason) {
   }
   // Reuse the standard stop path so the recorder window flushes properly
   // and chunks finish uploading. The session goes through stitching + KS
-  // dispatch like any other.
+  // dispatch like any other. The reason is persisted on the manifest so
+  // operators can see why a continuous session ended without us spamming
+  // the console.
   const trackedId = continuousSessionId;
   continuousSessionId = null;
   continuousSessionWorkspaceId = null;
-  console.log('[wt] stopping continuous session', trackedId, '— reason:', reason);
+  if (reason) {
+    try { writeManifest(trackedId, { stopReason: String(reason) }); } catch { /* manifest dir may be gone */ }
+  }
   if (session.status === 'recording' || session.status === 'starting') {
     session.status = 'stopping';
     broadcastSessionEvent('stopping', session);

@@ -190,11 +190,17 @@
       useBtn.textContent = isActive ? 'Reload' : 'Use';
       useBtn.onclick = async () => {
         if (env.customizable) {
-          // Persist whatever's in the input first so the reload picks up
-          // the latest URL.
-          const input = document.getElementById('url-input-' + env.key);
-          if (input && input.value.trim() !== env.url) {
-            await bridge.setEnvironmentUrl(env.key, input.value.trim());
+          // Persist any pending URL edits before reloading.
+          const fInput = document.getElementById('frontend-input-' + env.key);
+          const uInput = document.getElementById('uac-input-' + env.key);
+          const currentFrontend = env.frontendUrl || env.url;
+          if (fInput && fInput.value.trim() !== currentFrontend) {
+            await bridge.setEnvironmentUrl(env.key, fInput.value.trim());
+          }
+          if (uInput && uInput.value.trim() !== (env.uacUrl || '')) {
+            if (bridge.setEnvironmentUacUrl) {
+              await bridge.setEnvironmentUacUrl(env.key, uInput.value.trim());
+            }
           }
         }
         await bridge.setEnvironment(env.key);
@@ -205,47 +211,93 @@
       list.appendChild(row);
 
       if (env.customizable) {
-        const inputRow = document.createElement('div');
-        inputRow.className = 'url-input-row';
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'url-input';
-        input.id = 'url-input-' + env.key;
-        input.value = env.url;
-        input.placeholder = env.defaultUrl;
-        input.addEventListener('keydown', async (e) => {
-          if (e.key === 'Enter') {
-            await bridge.setEnvironmentUrl(env.key, input.value.trim());
-            await bridge.setEnvironment(env.key);
-          }
-        });
-        input.addEventListener('blur', async () => {
-          if (input.value.trim() !== env.url) {
-            await bridge.setEnvironmentUrl(env.key, input.value.trim());
-            await render();
-          }
-        });
-        inputRow.appendChild(input);
-
-        if (env.url !== env.defaultUrl) {
-          const reset = document.createElement('button');
-          reset.className = 'reset-btn';
-          reset.textContent = 'Reset';
-          reset.title = 'Reset to ' + env.defaultUrl;
-          reset.onclick = async () => {
-            await bridge.setEnvironmentUrl(env.key, '');
-            await render();
-          };
-          inputRow.appendChild(reset);
-        }
-
-        // Append the input row directly under the env row.
+        // Build two input rows — frontend URL and UAC API URL — so the
+        // user can fix whichever is unreachable. Useful on LAN setups
+        // (Windows desktop talking to a Mac dev box) where the desktop
+        // needs explicit URLs because `localhost` doesn't resolve.
         const wrapper = document.createElement('div');
         wrapper.style.marginBottom = '0.5rem';
-        wrapper.appendChild(inputRow);
+
+        const frontendUrl = env.frontendUrl || env.url;
+        const frontendDefault = env.defaultFrontendUrl || env.defaultUrl;
+        wrapper.appendChild(buildField({
+          id: 'frontend-input-' + env.key,
+          labelText: 'Frontend',
+          initial: frontendUrl,
+          placeholder: frontendDefault,
+          isDirty: () => wrapper.querySelector('#frontend-input-' + env.key).value.trim() !== frontendUrl,
+          onSave: async (val) => {
+            await bridge.setEnvironmentUrl(env.key, val);
+            await render();
+          },
+          defaultValue: frontendDefault,
+          onReset: async () => {
+            await bridge.setEnvironmentUrl(env.key, '');
+            await render();
+          },
+        }));
+
+        wrapper.appendChild(buildField({
+          id: 'uac-input-' + env.key,
+          labelText: 'UAC API',
+          initial: env.uacUrl || '',
+          placeholder: env.defaultUacUrl,
+          isDirty: () => wrapper.querySelector('#uac-input-' + env.key).value.trim() !== (env.uacUrl || ''),
+          onSave: async (val) => {
+            if (bridge.setEnvironmentUacUrl) {
+              await bridge.setEnvironmentUacUrl(env.key, val);
+              await render();
+            }
+          },
+          defaultValue: env.defaultUacUrl,
+          onReset: async () => {
+            if (bridge.setEnvironmentUacUrl) {
+              await bridge.setEnvironmentUacUrl(env.key, '');
+              await render();
+            }
+          },
+        }));
+
         list.appendChild(wrapper);
       }
     }
+  }
+
+  function buildField(opts) {
+    const row = document.createElement('div');
+    row.className = 'url-input-row';
+    row.style.marginTop = '4px';
+
+    const label = document.createElement('label');
+    label.textContent = opts.labelText;
+    label.style.cssText = 'font-size: 0.7rem; opacity: 0.7; min-width: 64px; text-align: right;';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'url-input';
+    input.id = opts.id;
+    input.value = opts.initial;
+    input.placeholder = opts.placeholder || '';
+    input.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') await opts.onSave(input.value.trim());
+    });
+    input.addEventListener('blur', async () => {
+      if (opts.isDirty()) await opts.onSave(input.value.trim());
+    });
+
+    row.appendChild(label);
+    row.appendChild(input);
+
+    if (opts.initial !== opts.defaultValue) {
+      const reset = document.createElement('button');
+      reset.className = 'reset-btn';
+      reset.textContent = 'Reset';
+      reset.title = 'Reset to ' + opts.defaultValue;
+      reset.onclick = opts.onReset;
+      row.appendChild(reset);
+    }
+
+    return row;
   }
 
   function escapeHtml(s) {

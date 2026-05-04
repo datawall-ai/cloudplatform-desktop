@@ -93,21 +93,26 @@ echo "${CYAN}============================================${NC}"
 echo ""
 
 # ============================================
-# Step 1: Version (CalVer: YYYY.M.D — semver-compatible date versioning)
+# Step 1: Version (UTC timestamp — YYMMDD.HHMM.<bump>)
 # ============================================
+#
+# Every build gets a fresh version string derived from the UTC clock so
+# the version is monotonically increasing and never matches a prior
+# build. Format: YYMMDD.HHMM.0 (semver-compatible 3-part). On the rare
+# case where two builds happen in the same UTC minute, the trailing
+# segment bumps until we find a free tag.
+#
+# Examples:
+#   2026-05-03 11:51 UTC  →  260503.1151.0
+#   same minute rebuild   →  260503.1151.1
 
-# Auto-generate today's date as version (no leading zeros for semver compat)
-YEAR=$(date +%Y)
-MONTH=$(date +%-m)
-DAY=$(date +%-d)
-TODAY="${YEAR}.${MONTH}.${DAY}"
-
-# Check if a tag for today already exists, auto-increment if so
-SUGGESTED="$TODAY"
-BUILD_NUM=1
+YYMMDD=$(date -u +%y%m%d)
+HHMM=$(date -u +%H%M)
+SUGGESTED="${YYMMDD}.${HHMM}.0"
+BUMP=0
 while git tag -l "v$SUGGESTED" | grep -q .; do
-    BUILD_NUM=$((BUILD_NUM + 1))
-    SUGGESTED="${TODAY}-${BUILD_NUM}"
+    BUMP=$((BUMP + 1))
+    SUGGESTED="${YYMMDD}.${HHMM}.${BUMP}"
 done
 
 echo "${BOLD}Step 1: Version${NC}"

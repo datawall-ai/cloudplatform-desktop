@@ -73,8 +73,11 @@ async function postPresence() {
   if (!credentials) return;
   const { apiBase, jwt, workspaceId } = credentials;
   const url = apiBase.replace(/\/$/, '') + '/desktop/presence';
+  // Presence is fire-and-forget. If unreachable, the next heartbeat
+  // (~5min) tries again. Logging on each tick spams the console when
+  // UAC is offline, so we just swallow non-2xx and network errors.
   try {
-    const res = await fetch(url, {
+    await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -83,13 +86,7 @@ async function postPresence() {
       },
       body: JSON.stringify(buildPayload()),
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      console.warn('[presence] post failed', res.status, text);
-    }
-  } catch (err) {
-    console.warn('[presence] post error', err && err.message);
-  }
+  } catch { /* silent */ }
 }
 
 function setCredentials(cfg) {

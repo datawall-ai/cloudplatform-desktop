@@ -16,8 +16,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // for a future renderer gesture (e.g. long-press the logo) that lets
   // internal users hop between local and prod without restarting.
   app: {
-    // v2: setEnvironmentUrl + dev-mode menu toggle.
-    version: 2,
+    // v3: synchronous initialEnv snapshot at preload time so
+    // cloudplatform service modules can resolve the UAC URL at
+    // module-load time (their `const URL = ...` reads happen once,
+    // before any async ipc call could resolve).
+    version: 3,
+    initialEnv: (() => {
+      try { return ipcRenderer.sendSync('app:get-environment-sync'); }
+      catch { return null; }
+    })(),
     getEnvironment: () => ipcRenderer.invoke('app:get-environment'),
     listEnvironments: () => ipcRenderer.invoke('app:list-environments'),
     setEnvironment: (key) => ipcRenderer.invoke('app:set-environment', key),
@@ -25,6 +32,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // an empty string or null to revert to the default. Reloads the
     // window if the override targets the currently-active env.
     setEnvironmentUrl: (key, url) => ipcRenderer.invoke('app:set-environment-url', key, url),
+    // Override the UAC API URL for a customizable env — used when the
+    // desktop is on a different host from the UAC server (e.g. RDP +
+    // LAN setups where `localhost` doesn't resolve to the dev box).
+    setEnvironmentUacUrl: (key, url) => ipcRenderer.invoke('app:set-environment-uac-url', key, url),
     reload: () => ipcRenderer.invoke('app:reload'),
   },
 
