@@ -282,9 +282,16 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('app:set-environment-uac-url', (_event, key, url) => {
     // Override the UAC API URL for a customizable env. The renderer
-    // reads this on the next page load (or via getEnvironment polling)
-    // — no window reload needed because the frontend URL didn't change.
-    return environment.setCustomUacUrl(key, url);
+    // captures `initialEnv.uacUrl` synchronously at preload time —
+    // service modules read it once at module-load and cache it. So if
+    // we're updating the active env we MUST reload the window for the
+    // new URL to take effect; otherwise the renderer keeps hitting the
+    // old (typically `localhost`) host.
+    const updated = environment.setCustomUacUrl(key, url);
+    if (key === environment.getCurrent().key && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.loadURL(environment.getCurrent().url);
+    }
+    return updated;
   });
   ipcMain.handle('app:reload', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
