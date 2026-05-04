@@ -19,9 +19,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-latest
-            platform: mac
-            cmd: npm run build:mac
+          # macOS build intentionally disabled — Apple notarytool returns
+          # HTTP 403 ("required agreement is missing or has expired") until
+          # the Account Holder accepts the latest Apple Developer Program
+          # License Agreement. Restore once that's signed:
+          #   - os: macos-latest
+          #     platform: mac
+          #     cmd: npm run build:mac
           - os: windows-latest
             platform: win
             cmd: npm run build:win

@@ -6,6 +6,13 @@
 #
 # For GitHub releases, set GITHUB_TOKEN:
 #   export GITHUB_TOKEN=ghp_your_token_here
+#
+# NOTE: macOS builds are currently disabled. Apple's notarytool is rejecting
+# submissions with HTTP 403 "A required agreement is missing or has expired"
+# until the Account Holder accepts the latest Apple Developer Program License
+# Agreement at https://developer.apple.com/account. Once that's done, restore
+# the `--mac` invocation + codesign verification loop in case "1)" below.
+# Windows is the only target for the time being.
 
 set -e
 
@@ -169,15 +176,18 @@ echo "${BOLD}Step 3: Build${NC}"
 echo ""
 
 if [ "$HOST_OS" = "mac" ]; then
-    echo "  1) ${GREEN}Build on this machine${NC} → .dmg + .zip + .exe"
-    echo "  2) ${CYAN}Push to GitHub Actions${NC} → CI builds on macOS + Windows runners"
+    echo "  ${YELLOW}macOS builds are disabled (Apple Developer agreement issue —${NC}"
+    echo "  ${YELLOW}see header comment in build.sh). Building Windows only.${NC}"
+    echo ""
+    echo "  1) ${GREEN}Build on this machine${NC} → .exe (Windows via Docker)"
+    echo "  2) ${CYAN}Push to GitHub Actions${NC} → CI builds on Windows runners"
     echo "  3) ${YELLOW}Skip${NC} → just push code, no build"
     echo ""
     read -p "  Choose [1/2/3]: " BUILD_CHOICE
 else
-    echo "  ${YELLOW}You're on $HOST_OS — local builds require macOS.${NC}"
+    echo "  ${YELLOW}You're on $HOST_OS — local Windows cross-builds run via Docker.${NC}"
     echo ""
-    echo "  1) ${CYAN}Push to GitHub Actions${NC} → CI builds on macOS + Windows runners"
+    echo "  1) ${CYAN}Push to GitHub Actions${NC} → CI builds on Windows runners"
     echo "  2) ${YELLOW}Skip${NC} → just push code, no build"
     echo ""
     read -p "  Choose [1/2]: " NON_MAC_CHOICE
@@ -209,28 +219,17 @@ case "$BUILD_CHOICE" in
     echo "  ${GREEN}==> Cleaning previous build...${NC}"
     rm -rf release/ 2>/dev/null || true
 
-    echo "  ${GREEN}==> Building macOS (x64 + arm64)...${NC}"
-    npx electron-builder --mac
-
-    # electron-builder signs the .app, notarizes it, then packages it into the DMG.
-    # The .app inside the DMG is signed + notarized — that's all Gatekeeper needs.
-    # Do NOT sign/notarize the DMG itself — stapling invalidates the DMG's codesign,
-    # which causes "damaged and can't be opened" on Apple Silicon (arm64 requires
-    # valid signatures; x64 tolerates invalid ones with a weaker warning).
-
-    # Verify .app signatures
-    for APP_DIR in release/mac release/mac-arm64; do
-        [ -d "$APP_DIR" ] || continue
-        APP_PATH="$APP_DIR/Cloud Platform.app"
-        [ -d "$APP_PATH" ] || continue
-        echo "  Verifying $(basename "$APP_DIR")/Cloud Platform.app..."
-        codesign --verify --deep --strict --verbose=2 "$APP_PATH" 2>&1 | sed 's/^/    /'
-        spctl --assess --type execute --verbose "$APP_PATH" 2>&1 | sed 's/^/    /'
-    done
+    # macOS build intentionally skipped — see header comment. When notarization
+    # is unblocked, restore:
+    #   npx electron-builder --mac
+    #   plus the codesign --verify / spctl --assess loop over release/mac{,-arm64}
+    # The reasoning about NOT stapling the DMG (arm64 rejects DMGs with broken
+    # outer codesigns) lived here too — preserve that note when restoring.
 
     echo "  ${GREEN}==> Building Windows (x64 + arm64) via Docker...${NC}"
     if ! build_windows_in_docker; then
-        echo "  ${YELLOW}Skipping Windows artifacts.${NC} Mac builds above are still valid."
+        echo "  ${RED}Windows build failed — no artifacts produced.${NC}"
+        exit 1
     fi
 
     echo ""
