@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const workplaceTraining = require('./workplaceTraining.cjs');
 const environment = require('./environment.cjs');
+const updateChecker = require('./updateChecker.cjs');
 
 let mainWindow;
 
@@ -194,6 +195,7 @@ function buildMenuTemplate() {
           label: app.name,
           submenu: [
             { role: 'about' },
+            updateChecker.buildMenuItem(),
             { type: 'separator' },
             { role: 'hide' },
             { role: 'hideOthers' },
@@ -253,6 +255,15 @@ function buildMenuTemplate() {
           : [{ role: 'close' }]),
       ],
     },
+    // On macOS the "Check for Updates…" item lives under the app menu next
+    // to About (per platform convention); on Windows/Linux it goes under
+    // a Help menu since there's no dedicated app menu.
+    ...(isMac
+      ? []
+      : [{
+          label: 'Help',
+          submenu: [updateChecker.buildMenuItem()],
+        }]),
   ];
 
   return Menu.buildFromTemplate(template);
@@ -320,6 +331,9 @@ app.whenReady().then(() => {
   // window opens so the renderer never sees a missing-handler error if the
   // page boots fast and queries the bridge immediately.
   workplaceTraining.init();
+  // Update checker: registers IPC handlers immediately so the renderer can
+  // query status, kicks off background polling only in packaged builds.
+  updateChecker.init();
   createWindow();
 
   app.on('activate', () => {

@@ -20,7 +20,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // cloudplatform service modules can resolve the UAC URL at
     // module-load time (their `const URL = ...` reads happen once,
     // before any async ipc call could resolve).
-    version: 3,
+    // v4: update-check API (checkForUpdates / getUpdateStatus /
+    // openReleasePage / onUpdateStatus). Web UI can render its own
+    // "update available" indicator on top of the native dialog.
+    version: 4,
     initialEnv: (() => {
       try { return ipcRenderer.sendSync('app:get-environment-sync'); }
       catch { return null; }
@@ -37,6 +40,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // LAN setups where `localhost` doesn't resolve to the dev box).
     setEnvironmentUacUrl: (key, url) => ipcRenderer.invoke('app:set-environment-uac-url', key, url),
     reload: () => ipcRenderer.invoke('app:reload'),
+
+    // ---- Update checking (v4) ----------------------------------------
+    // Force a poll of the GitHub Releases API. Returns the same status
+    // shape as getUpdateStatus(). Use this to drive a manual "Check now"
+    // button in the web UI.
+    checkForUpdates: () => ipcRenderer.invoke('app:check-updates'),
+    // Read the cached status without triggering a request — cheap, safe
+    // to call on every render.
+    getUpdateStatus: () => ipcRenderer.invoke('app:get-update-status'),
+    // Open the GitHub release page in the user's default browser. Useful
+    // for a "View release notes" link in the web UI's banner.
+    openReleasePage: () => ipcRenderer.invoke('app:open-release-page'),
+    // Subscribe to status changes (state transitions, new latestVersion,
+    // errors). Returns an unsubscribe function for React effect cleanup.
+    onUpdateStatus: (handler) => {
+      const wrapped = (_event, payload) => handler(payload);
+      ipcRenderer.on('app:update-status', wrapped);
+      return () => ipcRenderer.removeListener('app:update-status', wrapped);
+    },
   },
 
   workplaceTraining: {
