@@ -142,6 +142,80 @@ Three repos involved (all under `/Volumes/T7/Developers/`):
 
 ---
 
+## Additional book of work (deferred)
+
+These were planned alongside the form-less "Watch and flag" workflow type
+but are scoped out of the current cut so we can ship the desktop-side
+piece first. Each is a meaningful unit of work and can land independently
+once the foundation below is in place.
+
+### Phase A — Findings pipeline (the watch-rule execution loop)
+
+- New table `observation_findings`:
+  `(id, workspace_id, workflow_id, session_id, detected_at, severity,
+    summary, evidence, acked_at, acked_by, deleted_at)`
+- New Celery task `evaluate_watch_rules_for_session(session_id)` —
+  fires from `stitch_and_dispatch_observability_session` once stitching
+  finishes. For each active observation workflow whose audience covers
+  the recorded user, runs an agent over the stitched transcript +
+  window manifest. Inserts 0..N findings.
+- Cost-aware execution model — **arm a watcher pattern, not a poll**:
+  - Each watch rule produces a "trigger condition" (small prompt) and a
+    "review prompt" (large prompt).
+  - The trigger condition is evaluated cheaply on the manifest's
+    window_series — looking for the apps/keywords that would matter for
+    this rule. If the trigger fires (or a max wall-clock window elapses,
+    e.g. 24h), only then run the full LLM review on the relevant slice
+    of the recording.
+  - Re-arm the watcher after each evaluation so coverage continues.
+  - Default model: turbo (we own it; cost per call is acceptable).
+- Notification emission per finding to the workflow's audience (existing
+  notifications system, new `observation_finding` type).
+- Workflow detail UI — new "Findings" tab visible only when
+  `purpose='observation'`, listing findings reverse-chronologically
+  with ack/dismiss.
+- LLM-determined severity + dedupe so noisy rules self-throttle.
+
+### Phase B — Conversations ↔ workflows
+
+- Chat tools registered in UAC's chat router:
+  - `list_workflows({ purpose?, audience_scope? })`
+  - `get_workflow(workflow_id)`
+  - `recent_runs(workflow_id, limit)` (form-based workflows)
+  - `recent_findings(workflow_id?, since?, severity?)`
+  - `summarize_workflow_activity(workflow_id, window)`
+- Tools call existing API endpoints with the user's JWT — workspace +
+  audience scoping is already enforced server-side, so no new RLS work.
+- Optional polish (own follow-up): when chat references a workflow or
+  finding, render a clickable card that deep-links into the Workflows
+  tab.
+- "Easy questions" surfacing — quick-suggest prompts on the Workflows
+  tab itself (e.g. "What's flagged today?") that feed straight into the
+  chat surface so users don't have to think up the prompt.
+
+### Privacy / capture scope (carried over)
+
+These are not blockers given the enterprise posture, but worth doing
+when convenient:
+
+- Workspace-level `excluded_apps: string[]` on
+  `workspace_observability_settings`. Apps in this list have their
+  window-metadata entries stripped before the manifest leaves the
+  desktop. UI: editable list in the Observability section of
+  Organization page.
+- "Pause recording when excluded app is foreground" — different and
+  stricter than metadata redaction. Stops the MediaRecorder while a
+  blacklisted app is focused, resumes when it loses focus. Adds a small
+  pause/resume control plane to the recorder.
+- Per-rule `scope` field on observation workflows — text the watch
+  agent gets prepended to its instruction (e.g. "only consider
+  activity in Chrome and Excel"). Stored in
+  `workflows.metadata.observation_scope`. Soft filter (LLM honors)
+  rather than hard filter (server enforces) until accuracy demands the
+  upgrade.
+
+---
+
 ## Notes
 
 - `cloudplatform-desktop` `main` is in sync with `origin/main` (verified

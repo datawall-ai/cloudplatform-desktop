@@ -31,6 +31,7 @@ const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const desktopPresence = require('./desktopPresence.cjs');
+const { getActiveWindow } = require('./activeWindow.cjs');
 
 // v2: real recorder. wt:start no longer transitions synchronously to
 // 'recording'; the renderer must wait for the 'started' event (or 'failed')
@@ -39,6 +40,18 @@ const desktopPresence = require('./desktopPresence.cjs');
 const BRIDGE_VERSION = 2;
 
 const RECORDER_CHUNK_INTERVAL_MS = 5000;
+
+// How often to sample the foreground OS window while a session is
+// recording. The result is stamped into session.windowSeries and goes
+// up to UAC so watch rules can later filter "only consider activity in
+// app X". Cheap (one execFile / 5s) and safe to drop samples — null
+// returns are ignored, the recording itself doesn't depend on this.
+const WINDOW_SAMPLE_MS = 5000;
+// Hard cap so a multi-hour continuous session doesn't grow the manifest
+// unboundedly. We sample every 5s with consecutive-dedup so 4320 samples
+// covers ~6h of distinct activity even when the user app-hops constantly.
+const WINDOW_SERIES_MAX = 4320;
+const windowSamplers = new Map(); // sessionId → interval handle
 
 // Continuous-mode workspaces auto-start a recording on workspace switch
 // and roll it over every hour so stitching + KS dispatch stay bounded
@@ -355,6 +368,72 @@ function publicSessionView(s) {
   };
 }
 
+// =============================================================================
+// Foreground window sampler — polls the OS for the focused app/window
+// every WINDOW_SAMPLE_MS and appends to session.windowSeries. The series
+// is deduped on consecutive identical (app, title) pairs so a user who
+// stares at one window for 10 minutes produces one entry, not 120. The
+// manifest is rewritten on each new entry so an unexpected exit still
+// preserves the trail. Final upload happens via the patch payload at
+// finalize/fail time.
+// =============================================================================
+
+function appendWindowSample(session, sample) {
+  if (!sample) return;
+  if (!Array.isArray(session.windowSeries)) session.windowSeries = [];
+  const last = session.windowSeries[session.windowSeries.length - 1];
+  if (last && last.app === sample.app && last.title === sample.title) {
+    // Same window as last sample — extend the previous entry's "until"
+    // marker rather than appending a duplicate.
+    last.untilTs = sample.ts;
+    return;
+  }
+  session.windowSeries.push({ ts: sample.ts, app: sample.app, title: sample.title });
+  // Hard cap — drop oldest entries if we exceed the budget. Better to
+  // lose early history than to crash the manifest writer with a 50MB blob.
+  if (session.windowSeries.length > WINDOW_SERIES_MAX) {
+    session.windowSeries.splice(0, session.windowSeries.length - WINDOW_SERIES_MAX);
+  }
+  try {
+    writeManifest(session.id, { windowSeries: session.windowSeries });
+  } catch {
+    // Manifest dir may be gone if the session was just finalized — ignore.
+  }
+}
+
+function startWindowSampler(session) {
+  // Idempotent — multiple calls (e.g. resume on relaunch) shouldn't
+  // stack timers.
+  if (windowSamplers.has(session.id)) return;
+  const tick = async () => {
+    try {
+      const sample = await getActiveWindow();
+      if (!sample) return;
+      // Drop the sample if the session has already terminated; the
+      // interval is cleared in stopWindowSampler but a tick can be
+      // mid-flight when that happens.
+      const live = sessions.get(session.id);
+      if (!live || live.status === 'stopped' || live.status === 'failed') return;
+      appendWindowSample(live, { ts: new Date().toISOString(), ...sample });
+    } catch {
+      // Sampler errors are intentionally silent — the recording is the
+      // primary deliverable; window metadata is best-effort.
+    }
+  };
+  // Sample immediately so the first entry doesn't lag by 5s, then on interval.
+  tick();
+  const handle = setInterval(tick, WINDOW_SAMPLE_MS);
+  windowSamplers.set(session.id, handle);
+}
+
+function stopWindowSampler(sessionId) {
+  const handle = windowSamplers.get(sessionId);
+  if (handle) {
+    clearInterval(handle);
+    windowSamplers.delete(sessionId);
+  }
+}
+
 // Spawn the hidden recorder window for a session. The window loads
 // recorder.html which calls wt-recorder:ready to fetch its config, then
 // runs MediaRecorder against the chosen desktopCapturer source. Errors
@@ -405,10 +484,12 @@ function failSession(session, error) {
   session.status = 'failed';
   session.error = String(error || 'Unknown error');
   session.stoppedAt = session.stoppedAt || new Date().toISOString();
+  stopWindowSampler(session.id);
   writeManifest(session.id, {
     status: 'failed',
     error: session.error,
     stoppedAt: session.stoppedAt,
+    windowSeries: session.windowSeries,
   });
   broadcastSessionEvent('failed', session);
   patchSessionOnServer(session, {
@@ -417,6 +498,7 @@ function failSession(session, error) {
     error: session.error,
     chunk_count: session.chunkCount,
     bytes_written: session.bytesWritten,
+    window_series: session.windowSeries,
   });
   // Kick the uploader so the all-chunks-uploaded signal fires once the
   // pending queue drains (or immediately if it's already empty).
@@ -431,7 +513,12 @@ function finalizeSession(session) {
   if (session.status === 'stopped' || session.status === 'failed') return;
   session.status = 'stopped';
   session.stoppedAt = session.stoppedAt || new Date().toISOString();
-  writeManifest(session.id, { stoppedAt: session.stoppedAt, status: 'stopped' });
+  stopWindowSampler(session.id);
+  writeManifest(session.id, {
+    stoppedAt: session.stoppedAt,
+    status: 'stopped',
+    windowSeries: session.windowSeries,
+  });
   broadcastSessionEvent('stopped', session);
   // Slice 3 (chunk uploader) is responsible for dispatching the final-chunk
   // PATCH once all uploads have flushed. Here we just record the local stop.
@@ -440,6 +527,7 @@ function finalizeSession(session) {
     stopped_at: session.stoppedAt,
     chunk_count: session.chunkCount,
     bytes_written: session.bytesWritten,
+    window_series: session.windowSeries,
   });
   kickDrain(session);
   const win = recorderWindows.get(session.id);
@@ -538,6 +626,9 @@ function startNewSession(opts = {}) {
     uploadedChunks: 0,
     sessionMeta,
     error: null,
+    // Foreground-window time series, populated by startWindowSampler.
+    // Empty until the first sample lands ~immediately after start.
+    windowSeries: [],
     // Pinned per-session so a workspace switch / token refresh
     // mid-recording can't redirect in-flight uploads.
     uploadConfig: uploadConfig ? { ...uploadConfig } : null,
@@ -549,6 +640,11 @@ function startNewSession(opts = {}) {
     sourceId, sourceLabel, sessionMeta,
   });
   broadcastSessionEvent('starting', session);
+
+  // Begin polling the OS foreground window every WINDOW_SAMPLE_MS so
+  // watch rules can later filter by which app/window was visible. Best-
+  // effort: failure here doesn't break the recording.
+  startWindowSampler(session);
 
   // Fire-and-forget register on the server. If it fails (no config yet,
   // network down, 401), the patch/upload paths will skip silently and
@@ -1010,6 +1106,10 @@ function resumeIncompleteSessions() {
       serverRegistered: false,
       uploadQueue: pendingChunks.slice(),
       allChunksAcknowledged: false,
+      // Restore window-metadata trail so the eventual patch payload still
+      // carries it. The session is marked 'failed' if it was mid-recording
+      // when the app died — we don't restart the sampler.
+      windowSeries: Array.isArray(manifest.windowSeries) ? manifest.windowSeries : [],
     };
     if (restored.status !== status) {
       restored.error = restored.error || 'Recorder process exited before stop';
