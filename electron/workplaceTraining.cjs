@@ -382,29 +382,30 @@ function appendWindowSample(session, sample) {
   if (!sample) return;
   if (!Array.isArray(session.windowSeries)) session.windowSeries = [];
   const last = session.windowSeries[session.windowSeries.length - 1];
+  // Local-storage entry. Always pushed to the server below so live-mode
+  // evaluation fires every tick even when the user hasn't changed
+  // windows (they asked for "one every 5s"; rate-limiting happens
+  // server-side via the cooldown).
+  const entry = { ts: sample.ts, app: sample.app, title: sample.title };
   if (last && last.app === sample.app && last.title === sample.title) {
     // Same window as last sample — extend the previous entry's "until"
-    // marker rather than appending a duplicate.
+    // marker locally so the manifest stays compact.
     last.untilTs = sample.ts;
-    return;
+  } else {
+    session.windowSeries.push(entry);
+    if (session.windowSeries.length > WINDOW_SERIES_MAX) {
+      session.windowSeries.splice(0, session.windowSeries.length - WINDOW_SERIES_MAX);
+    }
+    try {
+      writeManifest(session.id, { windowSeries: session.windowSeries });
+    } catch {
+      // Manifest dir may be gone if the session was just finalized — ignore.
+    }
   }
-  const entry = { ts: sample.ts, app: sample.app, title: sample.title };
-  session.windowSeries.push(entry);
-  // Hard cap — drop oldest entries if we exceed the budget. Better to
-  // lose early history than to crash the manifest writer with a 50MB blob.
-  if (session.windowSeries.length > WINDOW_SERIES_MAX) {
-    session.windowSeries.splice(0, session.windowSeries.length - WINDOW_SERIES_MAX);
-  }
-  try {
-    writeManifest(session.id, { windowSeries: session.windowSeries });
-  } catch {
-    // Manifest dir may be gone if the session was just finalized — ignore.
-  }
-  // Live-mode push to UAC. Fire-and-forget — if the network is down or
-  // the session isn't registered server-side yet, we just lose this
-  // sample's live evaluation; the local manifest still has it for the
-  // finalize-time safety-net pass. We send only the new entry, not the
-  // whole series, since the server appends.
+  // Live-mode push to UAC on every tick — fire-and-forget. The server
+  // also dedupes (extends untilTs on consecutive identical entries) but
+  // dispatches the watcher unconditionally on each push so the LLM gets
+  // a chance to see the latest activity even when nothing changed.
   pushWindowSampleToServer(session, entry).catch(() => { /* silent */ });
 }
 
