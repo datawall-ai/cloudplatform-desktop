@@ -40,6 +40,15 @@ const BRIDGE_VERSION = 2;
 
 const RECORDER_CHUNK_INTERVAL_MS = 5000;
 
+// Continuous-mode workspaces auto-start a recording on workspace switch
+// and roll it over every hour so stitching + KS dispatch stay bounded
+// per session. Tracked via continuousSessionId so we know what to stop
+// on workspace switch / quit / rollover.
+const CONTINUOUS_ROLLOVER_MS = 60 * 60 * 1000; // 1 hour
+let continuousSessionId = null;
+let continuousSessionWorkspaceId = null;
+let continuousRolloverTimer = null;
+
 // In-memory session table. Persisted state (chunk files, final manifest)
 // lives on disk under userData/workplace-training/<sessionId>/.
 const sessions = new Map();
@@ -461,6 +470,7 @@ ipcMain.handle('wt:set-upload-config', (_event, cfg = {}) => {
     uploadConfig = null;
     return { ok: false, reason: 'missing fields' };
   }
+  const prev = uploadConfig;
   uploadConfig = {
     apiBase: String(cfg.apiBase),
     jwt: String(cfg.jwt),
@@ -475,6 +485,16 @@ ipcMain.handle('wt:set-upload-config', (_event, cfg = {}) => {
   // Re-render the tray so the "Start screen recording" item flips from
   // disabled → enabled the moment we have credentials.
   trayMenuRefresh();
+  // If the workspace changed (or this is the first config), check the
+  // workspace's recording_mode and auto-start continuous capture if
+  // configured. Fire-and-forget — credentials handshake completes
+  // immediately for the renderer regardless.
+  const workspaceChanged = !prev || prev.workspaceId !== uploadConfig.workspaceId;
+  if (workspaceChanged) {
+    maybeStartContinuousRecording().catch((err) => {
+      console.warn('[wt] continuous start error', err && err.message);
+    });
+  }
   return { ok: true };
 });
 
@@ -551,6 +571,147 @@ ipcMain.handle('wt:start', async (_event, opts = {}) => {
   const session = startNewSession(opts);
   return publicSessionView(session);
 });
+
+// =============================================================================
+// Continuous mode — workspace says "record while this user is signed in."
+// Driven by workspace_observability_settings.recording_mode = 'continuous'.
+// We auto-start on workspace switch (when uploadConfig changes), stop on
+// switch-out / quit, and roll over every CONTINUOUS_ROLLOVER_MS so any
+// individual session fits a reasonable stitching budget.
+// =============================================================================
+
+async function fetchWorkspaceSettings(cfg) {
+  if (!cfg || !cfg.apiBase || !cfg.jwt || !cfg.workspaceId) return null;
+  const url = cfg.apiBase.replace(/\/$/, '') + '/observability/settings';
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: 'Bearer ' + cfg.jwt,
+        'X-Workspace-ID': cfg.workspaceId,
+      },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function stopContinuousSession(reason) {
+  if (!continuousSessionId) return;
+  const session = sessions.get(continuousSessionId);
+  if (!session) {
+    continuousSessionId = null;
+    continuousSessionWorkspaceId = null;
+    return;
+  }
+  if (continuousRolloverTimer) {
+    clearTimeout(continuousRolloverTimer);
+    continuousRolloverTimer = null;
+  }
+  // Reuse the standard stop path so the recorder window flushes properly
+  // and chunks finish uploading. The session goes through stitching + KS
+  // dispatch like any other.
+  const trackedId = continuousSessionId;
+  continuousSessionId = null;
+  continuousSessionWorkspaceId = null;
+  console.log('[wt] stopping continuous session', trackedId, '— reason:', reason);
+  if (session.status === 'recording' || session.status === 'starting') {
+    session.status = 'stopping';
+    broadcastSessionEvent('stopping', session);
+    const win = recorderWindows.get(trackedId);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('wt-recorder:stop');
+    } else {
+      finalizeSession(session);
+    }
+  }
+}
+
+async function startContinuousSession(cfg) {
+  // Don't double-start.
+  for (const s of sessions.values()) {
+    if ((s.status === 'starting' || s.status === 'recording')
+        && s.sessionMeta && s.sessionMeta.startedFrom === 'continuous'
+        && s.sessionMeta.workspaceId === cfg.workspaceId) {
+      continuousSessionId = s.id;
+      continuousSessionWorkspaceId = cfg.workspaceId;
+      return s;
+    }
+  }
+  let sources;
+  try {
+    sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      fetchWindowIcons: false,
+      thumbnailSize: { width: 0, height: 0 },
+    });
+  } catch (err) {
+    console.warn('[wt] continuous: getSources failed', err && err.message);
+    return null;
+  }
+  const primary = (sources || [])[0];
+  if (!primary) {
+    console.warn('[wt] continuous: no screens available');
+    return null;
+  }
+  const session = startNewSession({
+    sourceId: primary.id,
+    sourceLabel: primary.name,
+    sessionMeta: {
+      startedFrom: 'continuous',
+      workspaceId: cfg.workspaceId,
+    },
+  });
+  continuousSessionId = session.id;
+  continuousSessionWorkspaceId = cfg.workspaceId;
+  // Roll over so individual sessions stay bounded for stitching/KS.
+  if (continuousRolloverTimer) clearTimeout(continuousRolloverTimer);
+  continuousRolloverTimer = setTimeout(() => {
+    rolloverContinuousSession().catch((err) => {
+      console.warn('[wt] continuous rollover error', err && err.message);
+    });
+  }, CONTINUOUS_ROLLOVER_MS);
+  return session;
+}
+
+async function rolloverContinuousSession() {
+  // Stop the current session, then start a new one against the same
+  // workspace + creds. The old session goes through stitching + KS
+  // independently; the new one starts fresh chunk numbering.
+  if (!continuousSessionId || !uploadConfig) return;
+  const cfg = uploadConfig;
+  await stopContinuousSession('hourly rollover');
+  // Brief pause so the recorder window from the old session has time
+  // to finish closing before we open a new one.
+  await new Promise((r) => setTimeout(r, 500));
+  await startContinuousSession(cfg);
+}
+
+async function maybeStartContinuousRecording() {
+  if (!uploadConfig) return;
+  const cfg = uploadConfig;
+  // Workspace changed since the last continuous session — stop the old
+  // one before checking the new workspace's policy.
+  if (continuousSessionId && continuousSessionWorkspaceId !== cfg.workspaceId) {
+    await stopContinuousSession('workspace switch');
+  }
+  const settings = await fetchWorkspaceSettings(cfg);
+  if (!settings) return;
+  if (!settings.observability_enabled) {
+    if (continuousSessionId) await stopContinuousSession('observability disabled');
+    return;
+  }
+  if (settings.recording_mode !== 'continuous') {
+    if (continuousSessionId) await stopContinuousSession('mode is no longer continuous');
+    return;
+  }
+  // Server enforces audience on session register; if we're rejected we'll
+  // see it surface through 'failed' on the recorder. We still try.
+  if (!continuousSessionId) {
+    await startContinuousSession(cfg);
+  }
+}
 
 // Tray-initiated recording. Auto-picks the primary screen and starts a
 // session with no workflow context — the recording lands in the workspace
